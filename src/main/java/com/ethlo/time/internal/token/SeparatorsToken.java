@@ -21,10 +21,10 @@ package com.ethlo.time.internal.token;
  */
 
 import java.text.ParsePosition;
-import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 
-import com.ethlo.time.internal.util.ErrorUtil;
+import com.ethlo.time.internal.Cursor;
+import com.ethlo.time.internal.ParseFailure;
 import com.ethlo.time.token.DateTimeToken;
 
 public class SeparatorsToken implements DateTimeToken
@@ -39,31 +39,32 @@ public class SeparatorsToken implements DateTimeToken
     @Override
     public int read(final String text, final ParsePosition parsePosition)
     {
-        final int index = parsePosition.getIndex();
-        read(text, index);
-        parsePosition.setIndex(index + 1);
+        final Cursor cursor = new Cursor(text, parsePosition.getIndex());
+        read(cursor);
+        parsePosition.setIndex(cursor.position());
         return 1;
     }
 
     /**
-     * Asserts that one of the separators is at the given index. The token always consumes exactly one character.
+     * Asserts that one of the separators is at the cursor position and consumes it.
      */
-    public void read(final String text, final int index)
+    public void read(final Cursor cursor)
     {
-        if (text.length() <= index)
+        if (!cursor.hasRemaining())
         {
-            ErrorUtil.raiseUnexpectedEndOfText(text, text.length());
+            throw ParseFailure.unexpectedEndOfText(cursor.text(), cursor.text().length());
         }
 
-        final char c = text.charAt(index);
+        final char c = cursor.peek();
         for (char sep : separators)
         {
             if (c == sep)
             {
+                cursor.consume();
                 return;
             }
         }
-        throw new DateTimeParseException(String.format("Expected character %s at position %d, found %s: %s", Arrays.toString(separators), index + 1, text.charAt(index), text), text, index);
+        throw ParseFailure.unexpectedCharacter(cursor.text(), cursor.position(), separators);
     }
 
     @Override

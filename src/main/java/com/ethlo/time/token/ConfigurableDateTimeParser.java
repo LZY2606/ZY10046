@@ -33,6 +33,8 @@ import com.ethlo.time.DateTime;
 import com.ethlo.time.DateTimeParser;
 import com.ethlo.time.Field;
 import com.ethlo.time.TimezoneOffset;
+import com.ethlo.time.internal.Cursor;
+import com.ethlo.time.internal.ParseFailure;
 import com.ethlo.time.internal.token.DigitsToken;
 import com.ethlo.time.internal.token.FractionsToken;
 import com.ethlo.time.internal.token.SeparatorToken;
@@ -142,61 +144,62 @@ public class ConfigurableDateTimeParser implements DateTimeParser
         int highestOrdinal = YEAR.ordinal();
         final int[] values = new int[]{0, 1, 1, 0, 0, 0, 0, -1};
 
-        // The position is tracked in a local and only synced with the ParsePosition for tokens that need it, so
-        // the fixed-width built-ins do not pay for a memory round-trip per token
-        int pos = parsePosition.getIndex();
-        for (int i = 0; i < tokens.length; i++)
+        // The position is tracked in a shared cursor and only synced with the ParsePosition for
+        // externally supplied tokens, so the built-ins do not pay for a memory round-trip per token
+        final Cursor cursor = new Cursor(text, parsePosition.getIndex());
+        try
         {
-            final DateTimeToken token = tokens[i];
-            final byte kind = kinds[i];
-            final int index = pos;
-            final int value;
-            switch (kind)
+            for (int i = 0; i < tokens.length; i++)
             {
-                case KIND_DIGITS:
-                    final DigitsToken digits = (DigitsToken) token;
-                    value = digits.read(text, pos);
-                    pos += digits.getLength();
-                    break;
-                case KIND_SEPARATOR:
-                    ((SeparatorToken) token).read(text, pos);
-                    pos++;
-                    value = 1;
-                    break;
-                case KIND_SEPARATORS:
-                    ((SeparatorsToken) token).read(text, pos);
-                    pos++;
-                    value = 1;
-                    break;
-                case KIND_FRACTIONS:
-                    parsePosition.setIndex(pos);
-                    value = ((FractionsToken) token).read(text, parsePosition);
-                    pos = parsePosition.getIndex();
-                    break;
-                case KIND_ZONE_OFFSET:
-                    parsePosition.setIndex(pos);
-                    value = ((ZoneOffsetToken) token).read(text, parsePosition);
-                    pos = parsePosition.getIndex();
-                    break;
-                default:
-                    parsePosition.setIndex(pos);
-                    value = token.read(text, parsePosition);
-                    pos = parsePosition.getIndex();
-            }
-
-            final int ordinal = ordinals[i];
-            if (ordinal != -1)
-            {
-                values[ordinal] = value;
-                highestOrdinal = Math.max(ordinal, highestOrdinal);
-                if (kind == KIND_FRACTIONS)
+                final DateTimeToken token = tokens[i];
+                final byte kind = kinds[i];
+                final int index = cursor.position();
+                final int value;
+                switch (kind)
                 {
-                    fractionsLength = pos - index;
-                    values[ordinal] = scale(value, fractionsLength);
+                    case KIND_DIGITS:
+                        value = ((DigitsToken) token).read(cursor);
+                        break;
+                    case KIND_SEPARATOR:
+                        ((SeparatorToken) token).read(cursor);
+                        value = 1;
+                        break;
+                    case KIND_SEPARATORS:
+                        ((SeparatorsToken) token).read(cursor);
+                        value = 1;
+                        break;
+                    case KIND_FRACTIONS:
+                        value = ((FractionsToken) token).read(cursor);
+                        break;
+                    case KIND_ZONE_OFFSET:
+                        value = ((ZoneOffsetToken) token).read(cursor);
+                        break;
+                    default:
+                        parsePosition.setIndex(cursor.position());
+                        value = token.read(text, parsePosition);
+                        cursor.reset(parsePosition.getIndex());
+                }
+
+                final int ordinal = ordinals[i];
+                if (ordinal != -1)
+                {
+                    values[ordinal] = value;
+                    highestOrdinal = Math.max(ordinal, highestOrdinal);
+                    if (kind == KIND_FRACTIONS)
+                    {
+                        fractionsLength = cursor.position() - index;
+                        values[ordinal] = scale(value, fractionsLength);
+                    }
                 }
             }
         }
-        parsePosition.setIndex(pos);
+        catch (DateTimeParseException exc)
+        {
+            // A rolled-back candidate token may have observed a failure further ahead; never let a
+            // confirmed branch swallow it
+            throw ParseFailure.merge(exc, cursor.furthestFailure());
+        }
+        parsePosition.setIndex(cursor.position());
 
         return new DateTime(FIELDS[Math.min(highestOrdinal, NANO.ordinal())], values[Field.YEAR.ordinal()], values[Field.MONTH.ordinal()], values[Field.DAY.ordinal()], values[Field.HOUR.ordinal()], values[Field.MINUTE.ordinal()], values[Field.SECOND.ordinal()], values[Field.NANO.ordinal()], values[Field.ZONE_OFFSET.ordinal()] != -1 ? TimezoneOffset.ofTotalSeconds(values[Field.ZONE_OFFSET.ordinal()]) : null, fractionsLength);
     }

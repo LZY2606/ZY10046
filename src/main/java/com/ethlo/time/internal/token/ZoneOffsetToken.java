@@ -25,14 +25,13 @@ import static com.ethlo.time.internal.fixed.ITUParser.PLUS;
 import static com.ethlo.time.internal.fixed.ITUParser.TIME_SEPARATOR;
 import static com.ethlo.time.internal.fixed.ITUParser.ZULU_LOWER;
 import static com.ethlo.time.internal.fixed.ITUParser.ZULU_UPPER;
-import static com.ethlo.time.internal.util.ErrorUtil.assertPositionContains;
-import static com.ethlo.time.internal.util.ErrorUtil.raiseUnexpectedCharacter;
 import static com.ethlo.time.internal.util.LimitedCharArrayIntegerUtil.parse2;
 
 import java.text.ParsePosition;
-import java.time.format.DateTimeParseException;
 
 import com.ethlo.time.Field;
+import com.ethlo.time.internal.Cursor;
+import com.ethlo.time.internal.ParseFailure;
 import com.ethlo.time.token.DateTimeToken;
 
 public class ZoneOffsetToken implements DateTimeToken
@@ -40,49 +39,61 @@ public class ZoneOffsetToken implements DateTimeToken
     @Override
     public int read(final String text, final ParsePosition parsePosition)
     {
-        final int idx = parsePosition.getIndex();
-        final int len = text.length();
-        final int left = len - idx;
+        final Cursor cursor = new Cursor(text, parsePosition.getIndex());
+        final int value = read(cursor);
+        parsePosition.setIndex(cursor.position());
+        return value;
+    }
 
-        if (left < 1)
+    /**
+     * Reads the zone offset at the cursor position. The zone offset is a candidate token: if the
+     * input is exhausted the cursor is left where it was and {@code -1} is returned. Once a
+     * zone-offset introducer (Z/z/+/-) is seen the branch is confirmed and any failure further
+     * ahead is propagated, never rolled back.
+     */
+    public int read(final Cursor cursor)
+    {
+        final int checkpoint = cursor.checkpoint();
+        if (!cursor.hasRemaining())
         {
+            cursor.reset(checkpoint);
             return -1;
         }
 
-        final char c = text.charAt(idx);
-        if (c == 'Z' || c == 'z')
+        final char c = cursor.peek();
+        if (c == ZULU_UPPER || c == ZULU_LOWER)
         {
-            parsePosition.setIndex(idx + 1);
+            cursor.consume();
             return 0;
         }
 
-        final char sign = text.charAt(idx);
-        if (sign != '+' && sign != '-')
+        if (c != PLUS && c != MINUS)
         {
-            throw raiseUnexpectedCharacter(text, idx, ZULU_UPPER, ZULU_LOWER, PLUS, MINUS);
+            throw ParseFailure.unexpectedCharacter(cursor.text(), cursor.position(), ZULU_UPPER, ZULU_LOWER, PLUS, MINUS);
         }
 
-        if (left < 6)
+        if (cursor.remaining() < 6)
         {
-            throw new DateTimeParseException(String.format("Invalid timezone offset: %s", text), text, idx);
+            throw ParseFailure.invalidTimezoneOffset(cursor.text(), cursor.position());
         }
 
-        assertPositionContains(Field.ZONE_OFFSET, text, idx + 3, TIME_SEPARATOR);
-
-        int hours = parse2(text, idx + 1);
-        int minutes = parse2(text, idx + 4);
-        if (sign == '-')
+        final char sign = cursor.consume();
+        int hours = parse2(cursor.text(), cursor.position());
+        cursor.advance(2);
+        cursor.expect(TIME_SEPARATOR, Field.ZONE_OFFSET);
+        int minutes = parse2(cursor.text(), cursor.position());
+        cursor.advance(2);
+        if (sign == MINUS)
         {
             hours = -hours;
             minutes = -minutes;
 
             if (hours == 0 && minutes == 0)
             {
-                throw new DateTimeParseException("Unknown 'Local Offset Convention' date-time not allowed", text, idx);
+                throw ParseFailure.unknownLocalOffsetConvention(cursor.text(), cursor.position() - 6);
             }
         }
 
-        parsePosition.setIndex(idx + 6);
         return hours * 3600 + minutes * 60;
     }
 

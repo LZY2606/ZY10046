@@ -67,43 +67,48 @@ public class ItuDurationParser
             error("Duration cannot be empty", text, text.length() - 1);
         }
 
+        final Cursor cursor = new Cursor(text, offset);
         boolean negative = false;
-        int index = offset;
 
         // Check for a leading negative sign
-        if (text.charAt(offset) == MINUS)
+        if (cursor.peek() == MINUS)
         {
             negative = true;
-            index++;
+            cursor.consume();
         }
 
-        final DurationPartsConsumer handler = new DurationPartsConsumer(index, negative);
-        final int length = text.length();
+        final DurationPartsConsumer handler = new DurationPartsConsumer(cursor.position(), negative);
+        int segmentStart = cursor.position();
         try
         {
-            while (index < length)
+            while (cursor.hasRemaining())
             {
-                index = readUntilNonDigit(text, index, handler);
+                segmentStart = cursor.position();
+                readUntilNonDigit(cursor, handler);
             }
 
-            handler.validate(text, index);
+            handler.validate(text, cursor.position());
         }
         catch (ArithmeticException exc)
         {
             // NOTE: The overflow checks below use Math.addExact/multiplyExact, which signal with an
             // ArithmeticException. Callers are documented to get a DateTimeParseException, so translate it.
-            error("Duration is too large to be represented", text, Math.min(index, text.length() - 1));
+            error("Duration is too large to be represented", text, Math.min(segmentStart, text.length() - 1));
         }
 
         return handler.getResult();
     }
 
-    private static int readUntilNonDigit(final String text, final int offset, final DurationPartsConsumer consumer)
+    private static void readUntilNonDigit(final Cursor cursor, final DurationPartsConsumer consumer)
     {
+        final String text = cursor.text();
         long value = 0;
-        int index = offset;
-        int startIndex = index;
-        for (; index < text.length(); index++)
+        // Hot digit run: straight-line local index, same shape as the fixed parser's digit loops.
+        // The cursor is re-synced when the run ends.
+        int index = cursor.position();
+        final int startIndex = index;
+        final int length = text.length();
+        for (; index < length; index++)
         {
             final char c = text.charAt(index);
             if (c >= DIGIT_ZERO && c <= DIGIT_NINE)
@@ -113,21 +118,17 @@ public class ItuDurationParser
             }
             else
             {
-                final int length = index - startIndex;
-                consumer.accept(text, index, length, c, value);
-                value = 0;
-                startIndex = index + 1;
-                break;
+                consumer.accept(text, index, index - startIndex, c, value);
+                cursor.reset(index + 1);
+                return;
             }
         }
 
         // If we never hit any non-digit
-        final int length = index - startIndex;
         if (index - startIndex > 0)
         {
-            consumer.accept(text, index, length, UNIT_UNDEFINED, value);
+            consumer.accept(text, index, index - startIndex, UNIT_UNDEFINED, value);
         }
-
-        return index + 1;
+        cursor.reset(index);
     }
 }

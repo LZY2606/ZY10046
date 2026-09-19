@@ -23,6 +23,7 @@ package com.ethlo.time.internal.token;
 import java.text.ParsePosition;
 
 import com.ethlo.time.Field;
+import com.ethlo.time.internal.Cursor;
 import com.ethlo.time.internal.util.LimitedCharArrayIntegerUtil;
 import com.ethlo.time.token.DateTimeToken;
 
@@ -40,9 +41,19 @@ public class DigitsToken implements DateTimeToken
     @Override
     public int read(String text, ParsePosition parsePosition)
     {
-        final int offset = parsePosition.getIndex();
-        final int value = read(text, offset);
-        parsePosition.setIndex(offset + length);
+        final Cursor cursor = new Cursor(text, parsePosition.getIndex());
+        final int value = read(cursor);
+        parsePosition.setIndex(cursor.position());
+        return value;
+    }
+
+    /**
+     * Reads the digits at the cursor position and advances the cursor by {@link #getLength()}.
+     */
+    public int read(final Cursor cursor)
+    {
+        final int value = read(cursor.text(), cursor.position());
+        cursor.advance(length);
         return value;
     }
 

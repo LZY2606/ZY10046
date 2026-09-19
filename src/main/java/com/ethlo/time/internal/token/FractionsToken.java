@@ -20,14 +20,15 @@ package com.ethlo.time.internal.token;
  * #L%
  */
 
+import static com.ethlo.time.internal.ParseFailure.assertFractionDigits;
 import static com.ethlo.time.internal.fixed.ITUParser.MAX_FRACTION_DIGITS;
-import static com.ethlo.time.internal.util.ErrorUtil.assertFractionDigits;
 import static com.ethlo.time.internal.util.LimitedCharArrayIntegerUtil.DIGIT_9;
 import static com.ethlo.time.internal.util.LimitedCharArrayIntegerUtil.ZERO;
 
 import java.text.ParsePosition;
 
 import com.ethlo.time.Field;
+import com.ethlo.time.internal.Cursor;
 import com.ethlo.time.token.DateTimeToken;
 
 public class FractionsToken implements DateTimeToken
@@ -35,7 +36,20 @@ public class FractionsToken implements DateTimeToken
     @Override
     public int read(final String text, final ParsePosition parsePosition)
     {
-        final int startIndex = parsePosition.getIndex();
+        final Cursor cursor = new Cursor(text, parsePosition.getIndex());
+        final int value = read(cursor);
+        parsePosition.setIndex(cursor.position());
+        return value;
+    }
+
+    /**
+     * Reads the fraction digits at the cursor position, advancing the cursor past them.
+     */
+    public int read(final Cursor cursor)
+    {
+        // Hot digit run: straight-line local index, re-syncing the cursor when the run ends
+        final String text = cursor.text();
+        final int startIndex = cursor.position();
         int idx = startIndex;
         final int length = text.length();
         int value = 0;
@@ -46,22 +60,19 @@ public class FractionsToken implements DateTimeToken
             {
                 break;
             }
-            else
+            if (idx - startIndex < MAX_FRACTION_DIGITS)
             {
-                if (idx - startIndex < MAX_FRACTION_DIGITS)
-                {
-                    // Beyond the maximum the value is rejected below, so avoid overflowing the accumulator
-                    value = value * 10 + (c - ZERO);
-                }
-                idx++;
+                // Beyond the maximum the value is rejected below, so avoid overflowing the accumulator
+                value = value * 10 + (c - ZERO);
             }
+            idx++;
         }
+        cursor.reset(idx);
 
         // NOTE: The fixed-format parser has always enforced this. Without it here the accumulator silently
         // overflowed and the resulting nano value exceeded a second.
         assertFractionDigits(text, idx - startIndex, Math.max(startIndex, idx - 1));
 
-        parsePosition.setIndex(idx);
         return value;
     }
 

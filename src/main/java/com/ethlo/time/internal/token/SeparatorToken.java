@@ -22,7 +22,8 @@ package com.ethlo.time.internal.token;
 
 import java.text.ParsePosition;
 
-import com.ethlo.time.internal.util.ErrorUtil;
+import com.ethlo.time.internal.Cursor;
+import com.ethlo.time.internal.ParseFailure;
 import com.ethlo.time.token.DateTimeToken;
 
 public class SeparatorToken implements DateTimeToken
@@ -37,25 +38,26 @@ public class SeparatorToken implements DateTimeToken
     @Override
     public int read(final String text, final ParsePosition parsePosition)
     {
-        final int index = parsePosition.getIndex();
-        read(text, index);
-        parsePosition.setIndex(index + 1);
+        final Cursor cursor = new Cursor(text, parsePosition.getIndex());
+        read(cursor);
+        parsePosition.setIndex(cursor.position());
         return 1;
     }
 
     /**
-     * Asserts that the separator is at the given index. The token always consumes exactly one character.
+     * Asserts that the separator is at the cursor position and consumes it.
      */
-    public void read(final String text, final int index)
+    public void read(final Cursor cursor)
     {
-        if (index >= text.length())
+        if (!cursor.hasRemaining())
         {
-            ErrorUtil.raiseUnexpectedEndOfText(text, text.length());
+            throw ParseFailure.unexpectedEndOfText(cursor.text(), cursor.text().length());
         }
-        if (text.charAt(index) != separator)
+        if (cursor.peek() != separator)
         {
-            ErrorUtil.raiseUnexpectedCharacter(text, index, separator);
+            throw ParseFailure.unexpectedCharacter(cursor.text(), cursor.position(), separator);
         }
+        cursor.consume();
     }
 
     @Override

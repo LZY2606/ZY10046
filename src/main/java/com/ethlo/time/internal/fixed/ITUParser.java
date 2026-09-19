@@ -20,10 +20,7 @@ package com.ethlo.time.internal.fixed;
  * #L%
  */
 
-import static com.ethlo.time.internal.util.ErrorUtil.assertFractionDigits;
-import static com.ethlo.time.internal.util.ErrorUtil.assertPositionContains;
-import static com.ethlo.time.internal.util.ErrorUtil.raiseUnexpectedCharacter;
-import static com.ethlo.time.internal.util.ErrorUtil.raiseUnexpectedEndOfText;
+import static com.ethlo.time.internal.ParseFailure.assertFractionDigits;
 import static com.ethlo.time.internal.util.LimitedCharArrayIntegerUtil.ZERO;
 import static com.ethlo.time.internal.util.LimitedCharArrayIntegerUtil.parse2;
 import static com.ethlo.time.internal.util.LimitedCharArrayIntegerUtil.parse4;
@@ -38,6 +35,8 @@ import com.ethlo.time.DateTimeParser;
 import com.ethlo.time.Field;
 import com.ethlo.time.ParseConfig;
 import com.ethlo.time.TimezoneOffset;
+import com.ethlo.time.internal.Cursor;
+import com.ethlo.time.internal.ParseFailure;
 import com.ethlo.time.internal.util.ArrayUtils;
 
 public class ITUParser implements DateTimeParser
@@ -78,69 +77,70 @@ public class ITUParser implements DateTimeParser
 
     }
 
-    private static DateTime handleTime(final int offset, final ParseConfig parseConfig, final String chars, final int year, final int month, final int day, final int hour, final int minute)
+    private static DateTime handleTime(final Cursor cursor, final ParseConfig parseConfig, final int year, final int month, final int day, final int hour, final int minute)
     {
-        switch (chars.charAt(offset + 16))
+        switch (cursor.peek())
         {
             case TIME_SEPARATOR:
                 // We have seconds
-                return handleTimeResolution(offset, parseConfig, year, month, day, hour, minute, chars);
+                return handleTimeResolution(cursor, parseConfig, year, month, day, hour, minute);
 
             // We look for time-zone information
             case PLUS:
             case MINUS:
             case ZULU_UPPER:
             case ZULU_LOWER:
-                final TimezoneOffset zoneOffset = parseTimezone(offset, parseConfig, chars, offset + 16);
+                final TimezoneOffset zoneOffset = parseTimezone(cursor, parseConfig);
                 final int charLength = Field.MINUTE.getRequiredLength() + (zoneOffset != null ? zoneOffset.getRequiredLength() : 0);
                 return new DateTime(Field.MINUTE, year, month, day, hour, minute, 0, 0, zoneOffset, 0, charLength);
 
             default:
-                throw raiseUnexpectedCharacter(chars, offset + 16, TIME_SEPARATOR, ZULU_UPPER, ZULU_LOWER, PLUS, MINUS);
+                throw ParseFailure.unexpectedCharacter(cursor.text(), cursor.position(), TIME_SEPARATOR, ZULU_UPPER, ZULU_LOWER, PLUS, MINUS);
         }
     }
 
-    private static void assertAllowedDateTimeSeparator(final int offset, final String chars, final ParseConfig config)
+    private static void assertAllowedDateTimeSeparator(final Cursor cursor, final ParseConfig config)
     {
-        final int index = offset + 10;
-        final char needle = chars.charAt(index);
+        final char needle = cursor.peek();
         if (!config.isDateTimeSeparator(needle))
         {
             final String allowedCharStr = config.getDateTimeSeparators().length > 1 ? Arrays.toString(config.getDateTimeSeparators()) : Character.toString(config.getDateTimeSeparators()[0]);
-            throw new DateTimeParseException(String.format("Expected character %s at position %d, found %s: %s", allowedCharStr, index + 1, chars.charAt(index), chars), chars, index);
+            throw ParseFailure.expectedCharacter(cursor.text(), cursor.position(), allowedCharStr);
         }
+        cursor.consume();
     }
 
-    private static TimezoneOffset parseTimezone(int offset, final ParseConfig parseConfig, final String chars, final int idx)
+    private static TimezoneOffset parseTimezone(final Cursor cursor, final ParseConfig parseConfig)
     {
-        if (idx >= chars.length())
+        if (!cursor.hasRemaining())
         {
             return null;
         }
-        final int len = chars.length();
-        final int left = len - idx;
-        final char c = chars.charAt(idx);
+
+        final char c = cursor.peek();
         if (c == ZULU_UPPER || c == ZULU_LOWER)
         {
-            assertNoMoreChars(offset, parseConfig, chars, idx);
+            cursor.consume();
+            assertNoMoreChars(cursor, parseConfig);
             return TimezoneOffset.UTC;
         }
 
-        final char sign = chars.charAt(idx);
-        if (sign != PLUS && sign != MINUS)
+        if (c != PLUS && c != MINUS)
         {
-            throw raiseUnexpectedCharacter(chars, idx, ZULU_UPPER, ZULU_LOWER, PLUS, MINUS);
+            throw ParseFailure.unexpectedCharacter(cursor.text(), cursor.position(), ZULU_UPPER, ZULU_LOWER, PLUS, MINUS);
         }
 
-        if (left < 6)
+        if (cursor.remaining() < 6)
         {
-            throw new DateTimeParseException(String.format("Invalid timezone offset: %s", chars), chars, idx);
+            throw ParseFailure.invalidTimezoneOffset(cursor.text(), cursor.position());
         }
 
-        assertPositionContains(Field.ZONE_OFFSET, chars, idx + 3, TIME_SEPARATOR);
-
-        int hours = parse2(chars, idx + 1);
-        int minutes = parse2(chars, idx + 4);
+        final char sign = cursor.consume();
+        int hours = parse2(cursor.text(), cursor.position());
+        cursor.advance(2);
+        cursor.expect(TIME_SEPARATOR, Field.ZONE_OFFSET);
+        int minutes = parse2(cursor.text(), cursor.position());
+        cursor.advance(2);
         if (sign == MINUS)
         {
             hours = -hours;
@@ -148,61 +148,64 @@ public class ITUParser implements DateTimeParser
 
             if (hours == 0 && minutes == 0)
             {
-                throw new DateTimeParseException("Unknown 'Local Offset Convention' date-time not allowed", chars, idx);
+                throw ParseFailure.unknownLocalOffsetConvention(cursor.text(), cursor.position() - 6);
             }
         }
 
-        assertNoMoreChars(offset, parseConfig, chars, idx + 5);
+        assertNoMoreChars(cursor, parseConfig);
         return TimezoneOffset.ofHoursMinutes(hours, minutes);
     }
 
-    private static void assertNoMoreChars(final int offset, final ParseConfig parseConfig, final String chars, final int lastUsed)
+    private static void assertNoMoreChars(final Cursor cursor, final ParseConfig parseConfig)
     {
-        if (parseConfig.isFailOnTrailingJunk() && offset == 0)
+        if (parseConfig.isFailOnTrailingJunk() && cursor.startOffset() == 0 && cursor.hasRemaining())
         {
-            if (chars.length() > lastUsed + 1)
-            {
-                throw new DateTimeParseException(String.format("Trailing junk data after position %d: %s", lastUsed + 2, chars), chars, lastUsed + 1);
-            }
+            throw new DateTimeParseException(String.format("Trailing junk data after position %d: %s", cursor.position() + 1, cursor.text()), cursor.text(), cursor.position());
         }
     }
 
     public static DateTime parseLenient(final String chars, final ParseConfig parseConfig, int offset)
     {
         final int availableLength = sanityCheckInputParams(chars, offset);
+        final Cursor cursor = new Cursor(chars, offset);
 
         // Date portion
 
         // YEAR
-        final int years = parseYears(chars, offset);
+        final int years = parse4(chars, cursor.position());
+        cursor.advance(4);
         if (4 == availableLength)
         {
             return new DateTime(Field.YEAR, years, 0, 0, 0, 0, 0, 0, null, 0, availableLength);
         }
 
         // MONTH
-        assertPositionContains(Field.MONTH, chars, offset + 4, DATE_SEPARATOR);
-        final int month = parseMonth(chars, offset);
+        cursor.expect(DATE_SEPARATOR, Field.MONTH);
+        final int month = parse2(chars, cursor.position());
+        cursor.advance(2);
         if (7 == availableLength)
         {
             return new DateTime(Field.MONTH, years, month, 0, 0, 0, 0, 0, null, 0, availableLength);
         }
 
         // DAY
-        assertPositionContains(Field.DAY, chars, offset + 7, DATE_SEPARATOR);
-        final int days = parseDays(chars, offset);
+        cursor.expect(DATE_SEPARATOR, Field.DAY);
+        final int days = parse2(chars, cursor.position());
+        cursor.advance(2);
         if (10 == availableLength)
         {
             return new DateTime(Field.DAY, years, month, days, 0, 0, 0, 0, null, 0, availableLength);
         }
 
         // HOURS
-        assertAllowedDateTimeSeparator(offset, chars, parseConfig);
-        final int hours = parseHours(chars, offset);
+        assertAllowedDateTimeSeparator(cursor, parseConfig);
+        final int hours = parse2(chars, cursor.position());
+        cursor.advance(2);
 
         // MINUTES
-        assertPositionContains(Field.MINUTE, chars, offset + 13, TIME_SEPARATOR);
-        final int minutes = parseMinutes(chars, offset);
+        cursor.expect(TIME_SEPARATOR, Field.MINUTE);
+        final int minutes = parse2(chars, cursor.position());
+        cursor.advance(2);
         if (availableLength == 16)
         {
             // Have only minutes
@@ -210,7 +213,7 @@ public class ITUParser implements DateTimeParser
         }
 
         // SECONDS or TIMEZONE
-        return handleTime(offset, parseConfig, chars, years, month, days, hours, minutes);
+        return handleTime(cursor, parseConfig, years, month, days, hours, minutes);
     }
 
     public static int sanityCheckInputParams(String chars, int offset)
@@ -234,103 +237,100 @@ public class ITUParser implements DateTimeParser
         return availableLength;
     }
 
-    private static int parseSeconds(int offset, String chars)
+    private static DateTime handleTimeResolution(final Cursor cursor, final ParseConfig parseConfig, final int year, final int month, final int day, final int hour, final int minute)
     {
-        return parse2(chars, offset + 17);
-    }
-
-    private static int parseMinutes(String chars, int offset)
-    {
-        return parse2(chars, offset + 14);
-    }
-
-    private static int parseHours(String chars, int offset)
-    {
-        return parse2(chars, offset + 11);
-    }
-
-    private static int parseDays(String chars, int offset)
-    {
-        return parse2(chars, offset + 8);
-    }
-
-    private static int parseMonth(String chars, int offset)
-    {
-        return parse2(chars, offset + 5);
-    }
-
-    private static int parseYears(String chars, int offset)
-    {
-        return parse4(chars, offset);
-    }
-
-    private static DateTime handleTimeResolution(final int offset, ParseConfig parseConfig, int year, int month, int day, int hour, int minute, String chars)
-    {
-        final int length = chars.length() - offset;
-        if (length > 19)
+        // The cursor is positioned at the seconds separator
+        if (cursor.remaining() > 3)
         {
-            final char c = chars.charAt(offset + 19);
+            final char c = cursor.peek(3);
             if (parseConfig.isFractionSeparator(c))
             {
-                return handleFractionalSeconds(offset, parseConfig, year, month, day, hour, minute, chars);
+                return handleFractionalSeconds(cursor, parseConfig, year, month, day, hour, minute);
             }
             else if (c == ZULU_UPPER || c == ZULU_LOWER)
             {
-                assertNoMoreChars(offset, parseConfig, chars, offset + 19);
-                return handleSecondResolution(offset, year, month, day, hour, minute, chars, TimezoneOffset.UTC);
+                cursor.advance(4);
+                assertNoMoreChars(cursor, parseConfig);
+                return handleSecondResolution(cursor, year, month, day, hour, minute, TimezoneOffset.UTC);
             }
             else if (c == PLUS || c == MINUS)
             {
-                final TimezoneOffset timezoneOffset = parseTimezone(offset, parseConfig, chars, offset + 19);
-                return handleSecondResolution(offset, year, month, day, hour, minute, chars, timezoneOffset);
+                cursor.advance(3);
+                final TimezoneOffset timezoneOffset = parseTimezone(cursor, parseConfig);
+                return handleSecondResolution(cursor, year, month, day, hour, minute, timezoneOffset);
             }
             else
             {
-                throw raiseUnexpectedCharacter(chars, offset + 19, ArrayUtils.merge(parseConfig.getFractionSeparators(), new char[]{ZULU_UPPER, ZULU_LOWER, PLUS, MINUS}));
+                throw ParseFailure.unexpectedCharacter(cursor.text(), cursor.position() + 3, ArrayUtils.merge(parseConfig.getFractionSeparators(), new char[]{ZULU_UPPER, ZULU_LOWER, PLUS, MINUS}));
             }
         }
-        else if (length == 19)
+        else if (cursor.remaining() == 3)
         {
-            final int seconds = parseSeconds(offset, chars);
-            return new DateTime(Field.SECOND, year, month, day, hour, minute, seconds, 0, null, 0, length);
+            final int seconds = parse2(cursor.text(), cursor.position() + 1);
+            return new DateTime(Field.SECOND, year, month, day, hour, minute, seconds, 0, null, 0, cursor.remaining() + 16);
         }
 
-        throw raiseUnexpectedEndOfText(chars, offset + 16);
+        throw ParseFailure.unexpectedEndOfText(cursor.text(), cursor.position());
     }
 
-    private static DateTime handleSecondResolution(int offset, int year, int month, int day, int hour, int minute, String chars, TimezoneOffset timezoneOffset)
+    private static DateTime handleSecondResolution(final Cursor cursor, final int year, final int month, final int day, final int hour, final int minute, final TimezoneOffset timezoneOffset)
     {
-        final int seconds = parseSeconds(offset, chars);
+        final int seconds = parse2(cursor.text(), cursor.startOffset() + 17);
         final int charLength = Field.SECOND.getRequiredLength() + (timezoneOffset != null ? timezoneOffset.getRequiredLength() : 0);
         return new DateTime(Field.SECOND, year, month, day, hour, minute, seconds, 0, timezoneOffset, 0, charLength);
     }
 
-    private static DateTime handleFractionalSeconds(int offset, ParseConfig parseConfig, int year, int month, int day, int hour, int minute, String chars)
+    private static DateTime handleFractionalSeconds(final Cursor cursor, final ParseConfig parseConfig, final int year, final int month, final int day, final int hour, final int minute)
+    {
+        final String chars = cursor.text();
+        final int fracStart = cursor.position() + 4;
+        // Hot digit run: straight-line code on primitives only, so no cursor escapes this method
+        final long run = parseFractionRun(chars, fracStart);
+        final int idx = (int) (run >>> 32);
+        final int nanosRaw = (int) run;
+        final int fractionDigits = idx - fracStart;
+        cursor.reset(idx);
+        assertFractionDigits(chars, fractionDigits, idx - 1);
+
+        // Scale to nanoseconds
+        final int nanos = nanosRaw * NANO_SCALE[fractionDigits];
+
+        final TimezoneOffset timezoneOffset = parseTimezone(cursor, parseConfig);
+        final int charLength = cursor.position() - cursor.startOffset();
+        final int second = parse2(chars, cursor.startOffset() + 17);
+        return new DateTime(Field.NANO, year, month, day, hour, minute, second, nanos, timezoneOffset, fractionDigits, charLength);
+    }
+
+    /**
+     * Scans the fraction digits starting at {@code idx}. Returns the end index of the digit run
+     * in the high 32 bits and the accumulated value of the first up to 9 digits in the low 32 bits.
+     */
+    private static long parseFractionRun(final String chars, final int idx)
     {
         final int length = chars.length();
-        int idx = offset + 20;
         int fractionDigits = 0;
         int nanos = 0;
+        int i = idx;
 
         // Fast path for the common 3/6/9 digit cases: consume digits three at a time in straight-line code
-        while (fractionDigits < MAX_FRACTION_DIGITS && idx + 3 <= length)
+        while (fractionDigits < MAX_FRACTION_DIGITS && i + 3 <= length)
         {
-            final int d0 = chars.charAt(idx) - ZERO;
-            final int d1 = chars.charAt(idx + 1) - ZERO;
-            final int d2 = chars.charAt(idx + 2) - ZERO;
+            final int d0 = chars.charAt(i) - ZERO;
+            final int d1 = chars.charAt(i + 1) - ZERO;
+            final int d2 = chars.charAt(i + 2) - ZERO;
             if ((d0 | d1 | d2) < 0 || d0 > 9 || d1 > 9 || d2 > 9)
             {
                 break;
             }
             nanos = nanos * 1000 + d0 * 100 + d1 * 10 + d2;
             fractionDigits += 3;
-            idx += 3;
+            i += 3;
         }
 
         // Remainder: one digit at a time
-        while (idx < length)
+        while (i < length)
         {
-            final int d = chars.charAt(idx) - ZERO;
+            final int d = chars.charAt(i) - ZERO;
             if (d < 0 || d > 9)
             {
                 break;
@@ -341,17 +341,9 @@ public class ITUParser implements DateTimeParser
                 // Beyond the maximum the value is rejected below, so avoid overflowing the accumulator
                 nanos = nanos * RADIX + d;
             }
-            idx++;
+            i++;
         }
-        assertFractionDigits(chars, fractionDigits, idx - 1);
-
-        // Scale to nanoseconds
-        nanos *= NANO_SCALE[fractionDigits];
-
-        final TimezoneOffset timezoneOffset = parseTimezone(offset, parseConfig, chars, idx);
-        final int charLength = (idx + (timezoneOffset != null ? timezoneOffset.getRequiredLength() : 0)) - offset;
-        final int second = parseSeconds(offset, chars);
-        return new DateTime(Field.NANO, year, month, day, hour, minute, second, nanos, timezoneOffset, fractionDigits, charLength);
+        return ((long) i << 32) | (nanos & 0xFFFFFFFFL);
     }
 
     public static OffsetDateTime parseDateTime(final String chars, int offset)

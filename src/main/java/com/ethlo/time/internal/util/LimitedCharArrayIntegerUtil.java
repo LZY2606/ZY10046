@@ -21,6 +21,7 @@ package com.ethlo.time.internal.util;
  */
 
 import com.ethlo.time.internal.DateTimeFormatException;
+import com.ethlo.time.internal.ParseFailure;
 
 public final class LimitedCharArrayIntegerUtil
 {
@@ -101,14 +102,14 @@ public final class LimitedCharArrayIntegerUtil
                 final char c = strNum.charAt(i);
                 if (c < ZERO || c > DIGIT_9)
                 {
-                    ErrorUtil.raiseUnexpectedCharacter(strNum, i, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
+                    throw ParseFailure.unexpectedCharacter(strNum, i, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9');
                 }
                 result = (result * 10) + (c - ZERO);
             }
         }
         catch (StringIndexOutOfBoundsException exc)
         {
-            ErrorUtil.raiseUnexpectedEndOfText(strNum, startInclusive);
+            throw ParseFailure.unexpectedEndOfText(strNum, startInclusive);
         }
 
         return result;
