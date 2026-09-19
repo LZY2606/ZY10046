@@ -20,11 +20,11 @@ package com.ethlo.time.internal;
  * #L%
  */
 
-import static com.ethlo.time.internal.DurationPartsConsumer.error;
 import static com.ethlo.time.internal.fixed.ITUParser.RADIX;
-import static com.ethlo.time.internal.fixed.ITUParser.sanityCheckInputParams;
 
 import com.ethlo.time.Duration;
+import com.ethlo.time.internal.util.ErrorUtil;
+import com.ethlo.time.internal.util.ParseCursor;
 
 /**
  * <b>Rationale Against Supporting Years and Months</b>
@@ -61,73 +61,63 @@ public class ItuDurationParser
 
     public static Duration parse(final String text, final int offset)
     {
-        final int availableLength = sanityCheckInputParams(text, offset);
-        if (availableLength == 0)
+        final ParseCursor cursor = ParseCursor.of(text, offset);
+        if (!cursor.hasRemaining())
         {
-            error("Duration cannot be empty", text, text.length() - 1);
+            ErrorUtil.raise("Duration cannot be empty", text, text.length() - 1);
         }
-
-        boolean negative = false;
-        int index = offset;
 
         // Check for a leading negative sign
-        if (text.charAt(offset) == MINUS)
-        {
-            negative = true;
-            index++;
-        }
+        final boolean negative = cursor.consumeIf(MINUS);
 
-        final DurationPartsConsumer handler = new DurationPartsConsumer(index, negative);
-        final int length = text.length();
+        final DurationPartsConsumer handler = new DurationPartsConsumer(cursor.index(), negative);
+        // The start of the current segment, for overflow error reporting
+        int segmentStart = cursor.index();
         try
         {
-            while (index < length)
+            while (cursor.hasRemaining())
             {
-                index = readUntilNonDigit(text, index, handler);
+                segmentStart = cursor.index();
+                readUntilNonDigit(cursor, handler);
             }
 
-            handler.validate(text, index);
+            handler.validate(text, cursor.index());
         }
         catch (ArithmeticException exc)
         {
             // NOTE: The overflow checks below use Math.addExact/multiplyExact, which signal with an
             // ArithmeticException. Callers are documented to get a DateTimeParseException, so translate it.
-            error("Duration is too large to be represented", text, Math.min(index, text.length() - 1));
+            ErrorUtil.raise("Duration is too large to be represented", text, Math.min(segmentStart, text.length() - 1));
         }
 
         return handler.getResult();
     }
 
-    private static int readUntilNonDigit(final String text, final int offset, final DurationPartsConsumer consumer)
+    private static void readUntilNonDigit(final ParseCursor cursor, final DurationPartsConsumer consumer)
     {
+        final String text = cursor.text();
         long value = 0;
-        int index = offset;
-        int startIndex = index;
-        for (; index < text.length(); index++)
+        final int startIndex = cursor.index();
+        while (cursor.hasRemaining())
         {
-            final char c = text.charAt(index);
+            final char c = cursor.peek();
             if (c >= DIGIT_ZERO && c <= DIGIT_NINE)
             {
-                final int digit = c - DIGIT_ZERO;
-                value = Math.addExact(Math.multiplyExact(value, RADIX), digit);
+                value = Math.addExact(Math.multiplyExact(value, RADIX), c - DIGIT_ZERO);
+                cursor.advance(1);
             }
             else
             {
-                final int length = index - startIndex;
-                consumer.accept(text, index, length, c, value);
-                value = 0;
-                startIndex = index + 1;
-                break;
+                consumer.accept(text, cursor.index(), cursor.index() - startIndex, c, value);
+                cursor.advance(1);
+                return;
             }
         }
 
         // If we never hit any non-digit
-        final int length = index - startIndex;
-        if (index - startIndex > 0)
+        if (cursor.index() - startIndex > 0)
         {
-            consumer.accept(text, index, length, UNIT_UNDEFINED, value);
+            consumer.accept(text, cursor.index(), cursor.index() - startIndex, UNIT_UNDEFINED, value);
         }
-
-        return index + 1;
     }
 }

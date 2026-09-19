@@ -22,12 +22,11 @@ package com.ethlo.time.internal.token;
 
 import static com.ethlo.time.internal.fixed.ITUParser.MAX_FRACTION_DIGITS;
 import static com.ethlo.time.internal.util.ErrorUtil.assertFractionDigits;
-import static com.ethlo.time.internal.util.LimitedCharArrayIntegerUtil.DIGIT_9;
-import static com.ethlo.time.internal.util.LimitedCharArrayIntegerUtil.ZERO;
 
 import java.text.ParsePosition;
 
 import com.ethlo.time.Field;
+import com.ethlo.time.internal.util.ParseCursor;
 import com.ethlo.time.token.DateTimeToken;
 
 public class FractionsToken implements DateTimeToken
@@ -36,33 +35,15 @@ public class FractionsToken implements DateTimeToken
     public int read(final String text, final ParsePosition parsePosition)
     {
         final int startIndex = parsePosition.getIndex();
-        int idx = startIndex;
-        final int length = text.length();
-        int value = 0;
-        while (idx < length)
-        {
-            final char c = text.charAt(idx);
-            if (c < ZERO || c > DIGIT_9)
-            {
-                break;
-            }
-            else
-            {
-                if (idx - startIndex < MAX_FRACTION_DIGITS)
-                {
-                    // Beyond the maximum the value is rejected below, so avoid overflowing the accumulator
-                    value = value * 10 + (c - ZERO);
-                }
-                idx++;
-            }
-        }
+        final long run = ParseCursor.digitRun(text, startIndex, MAX_FRACTION_DIGITS);
+        final int length = ParseCursor.digitRunLength(run);
 
         // NOTE: The fixed-format parser has always enforced this. Without it here the accumulator silently
         // overflowed and the resulting nano value exceeded a second.
-        assertFractionDigits(text, idx - startIndex, Math.max(startIndex, idx - 1));
+        assertFractionDigits(text, length, Math.max(startIndex, startIndex + length - 1));
 
-        parsePosition.setIndex(idx);
-        return value;
+        parsePosition.setIndex(startIndex + length);
+        return ParseCursor.digitRunValue(run);
     }
 
     @Override

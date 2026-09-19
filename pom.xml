@@ -364,6 +364,7 @@ limitations under the License.
                                 </goals>
                                 <configuration>
                                     <jvmVersion>9</jvmVersion>
+                                    <overwriteExistingFiles>true</overwriteExistingFiles>
                                     <module>
                                         <moduleInfo>
                                             <name>com.ethlo.time</name>

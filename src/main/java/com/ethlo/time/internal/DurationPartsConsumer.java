@@ -26,9 +26,8 @@ import static com.ethlo.time.Duration.SECONDS_PER_MINUTE;
 import static com.ethlo.time.Duration.SECONDS_PER_WEEK;
 import static com.ethlo.time.internal.fixed.ITUParser.DIGITS_IN_NANO;
 
-import java.time.format.DateTimeParseException;
-
 import com.ethlo.time.Duration;
+import com.ethlo.time.internal.util.ErrorUtil;
 
 class DurationPartsConsumer
 {
@@ -57,7 +56,7 @@ class DurationPartsConsumer
 
     protected static void error(final String errorMessage, final String text, int index)
     {
-        throw new DateTimeParseException(errorMessage + ": " + text, text, index);
+        throw ErrorUtil.raise(errorMessage, text, index);
     }
 
     public final void accept(final String text, final int index, final int length, final char unit, final long value)

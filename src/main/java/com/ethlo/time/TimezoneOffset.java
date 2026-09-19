@@ -61,10 +61,11 @@ public class TimezoneOffset
 
     private static void validate(final int hours, final int minutes)
     {
-        // NOTE: The messages below intentionally mirror those of java.time.ZoneOffset
+        // NOTE: The messages below intentionally mirror those of java.time.ZoneOffset. The throw sites are
+        // kept in cold helper methods so this check stays small enough to be inlined into the parse hot path.
         if (hours < -MAX_OFFSET_HOURS || hours > MAX_OFFSET_HOURS)
         {
-            throw new DateTimeException("Zone offset hours not in valid range: value " + hours + " is not in the range -" + MAX_OFFSET_HOURS + " to " + MAX_OFFSET_HOURS);
+            throw hoursOutOfRange(hours);
         }
         if (hours > 0 && minutes < 0)
         {
@@ -76,12 +77,22 @@ public class TimezoneOffset
         }
         if (minutes < -59 || minutes > 59)
         {
-            throw new DateTimeException("Zone offset minutes not in valid range: value " + minutes + " is not in the range -59 to 59");
+            throw minutesOutOfRange(minutes);
         }
         if (Math.abs(hours * SECONDS_PER_HOUR + minutes * SECONDS_PER_MINUTE) > MAX_OFFSET_SECONDS)
         {
             throw new DateTimeException("Zone offset not in valid range: -18:00 to +18:00");
         }
+    }
+
+    private static DateTimeException hoursOutOfRange(final int hours)
+    {
+        return new DateTimeException("Zone offset hours not in valid range: value " + hours + " is not in the range -" + MAX_OFFSET_HOURS + " to " + MAX_OFFSET_HOURS);
+    }
+
+    private static DateTimeException minutesOutOfRange(final int minutes)
+    {
+        return new DateTimeException("Zone offset minutes not in valid range: value " + minutes + " is not in the range -59 to 59");
     }
 
     /**

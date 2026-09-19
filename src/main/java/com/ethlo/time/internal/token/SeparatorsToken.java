@@ -21,7 +21,6 @@ package com.ethlo.time.internal.token;
  */
 
 import java.text.ParsePosition;
-import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 
 import com.ethlo.time.internal.util.ErrorUtil;
@@ -63,7 +62,7 @@ public class SeparatorsToken implements DateTimeToken
                 return;
             }
         }
-        throw new DateTimeParseException(String.format("Expected character %s at position %d, found %s: %s", Arrays.toString(separators), index + 1, text.charAt(index), text), text, index);
+        throw ErrorUtil.raiseUnexpectedCharacter(text, index, separators);
     }
 
     @Override
